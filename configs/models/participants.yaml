@@ -1,0 +1,19 @@
+paths:
+  data_root: "/path/to/participants_sample_2d"
+  checkpoints: "artifacts/checkpoints/participants"
+  exported: "artifacts/exported/participants_model.keras"
+
+task:
+  name: "participants"
+  num_people_max: 5
+  joints_per_person: 25
+  feat_per_joint: 5   # у тебе 4 (x,y,conf,is_valid) — якщо 5, виправ
+
+train:
+  epochs: 30
+  batch_size: 32
+  val_split: 0.2
+  seed: 42
+  hid: 64
+  head_hid: 64
+  use_sample_weights: false

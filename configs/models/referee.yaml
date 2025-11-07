@@ -1,0 +1,17 @@
+paths:
+  data_root: "/path/to/referre_sample_2d"
+  checkpoints: "artifacts/checkpoints/referee"
+  exported: "artifacts/exported/ref_model.keras"
+
+task:
+  name: "referee"
+  num_people_max: 3
+  joints_per_person: 25
+  feat_per_joint: 5
+
+train:
+  epochs: 120
+  batch_size: 16
+  val_split: 0.2
+  seed: 42
+  head: 64
