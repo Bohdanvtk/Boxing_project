@@ -1,10 +1,13 @@
 from __future__ import annotations
+import copy
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Callable, Dict, Any
+from pathlib import Path
+from typing import List, Tuple, Optional, Callable, Dict, Any, Union
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from .track import Track, Detection
+from . import DEFAULT_TRACKING_CONFIG_PATH
 
 from .tracking_debug import (
     DebugLog,
@@ -223,18 +226,36 @@ def linear_assignment_with_unmatched(C: np.ndarray, large_cost: float) -> Tuple[
     return matched, unmatched_tracks, unmatched_dets
 
 
+def _load_match_config_from_yaml(
+    config_path: Optional[Union[str, Path]] = None,
+) -> MatchConfig:
+    """Read ``MatchConfig`` from a YAML file via ``utils.config`` helpers."""
+
+    from src.boxing_project.utils.config import load_tracking_config
+
+    resolved = Path(config_path) if config_path is not None else DEFAULT_TRACKING_CONFIG_PATH
+    # ``load_tracking_config`` already creates the dataclass instance; copy to avoid
+    # sharing mutable state between call sites.
+    _, match_cfg, _ = load_tracking_config(str(resolved))
+    return copy.deepcopy(match_cfg)
+
+
 def match_tracks_and_detections(
     tracks: List[Track],
     detections: List[Detection],
     cfg: Optional[MatchConfig] = None,
     show: bool = True,
     sink: Optional[Callable[[str], None]] = None,
+    config_path: Optional[Union[str, Path]] = None,
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int], np.ndarray, Dict[str, Any]]:
     """
     Тепер повертаємо й словник логу, щоб ти мав його на рівні кадру.
+
+    Якщо ``cfg`` не передано, параметри матчингу зчитуються з YAML-файлу
+    (``config_path`` або стандартний ``DEFAULT_TRACKING_CONFIG_PATH``).
     """
     if cfg is None:
-        cfg = MatchConfig()
+        cfg = _load_match_config_from_yaml(config_path)
 
     C, log_matcher = build_cost_matrix(tracks, detections, cfg, show=show, sink=sink)
     matches, um_tr, um_dt = linear_assignment_with_unmatched(C, cfg.large_cost)
