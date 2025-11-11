@@ -6,7 +6,7 @@ class DebugLog:
 
     id: int = 0
     """
-    Збирає структурований лог (dict) + за бажанням друкує; ВСЕГДА буферизує рядки.
+    Collects a structured log (dict) and optionally prints; ALWAYS buffers the lines.
     """
     def __init__(
         self,
@@ -15,16 +15,16 @@ class DebugLog:
     ):
         self.enabled_print = enabled_print
         self.sink = sink if sink is not None else print
-        self.buffer: List[str] = []          # ← буфер усіх рядків
+        self.buffer: List[str] = []          # ← buffer of all lines
 
         self.store: Dict[str, Any] = {
             "config": {},
             "shape": [0, 0],
             "pairs": [],
-            "print_chunks": self.buffer,     # ← буфер віддамо нагору
+            "print_chunks": self.buffer,     # ← we expose the buffer upwards
         }
 
-    # --- друк / буфер ---
+    # --- printing / buffering ---
     def _emit(self, line: str):
         self.buffer.append(line)
         if self.enabled_print:
@@ -35,7 +35,7 @@ class DebugLog:
 
     def section(self, title: str):
         bar = "—" * max(8, len(title))
-        self._emit("")         # порожній рядок перед секцією
+        self._emit("")         # empty line before section
         self._emit(title)
         self._emit(bar)
 
@@ -45,7 +45,7 @@ class DebugLog:
         for r in rows:
             self._emit(r)
 
-    # --- запис у словник ---
+    # --- writing into dictionary ---
     def add_pair(self, pair_obj: Dict[str, Any]):
         self.store["pairs"].append(pair_obj)
 
@@ -60,7 +60,7 @@ class DebugLog:
         self.store["shape"] = [int(shape[0]), int(shape[1])]
 
 
-# ---------- ПОЗА КЛАСОМ: хелпери для pose ----------
+# ---------- OUTSIDE THE CLASS: helpers for pose ----------
 
 def set_pose_no_keypoints(
     pose_dict: Dict[str, Any],
@@ -68,12 +68,12 @@ def set_pose_no_keypoints(
     pair_tag: str,
 ) -> None:
     """
-    Випадок: немає keypoints взагалі (або в треку, або в детекції).
-    Заповнює pose_dict і (опційно) щось друкує в лог.
+    Case: there are no keypoints at all (either in track or in detection).
+    Fills pose_dict and (optionally) prints something to the log.
     """
     if log:
         log.section(f"[{pair_tag}] POSE")
-        log._print("немає поз — D_pose=0.0")
+        log._print("no pose — D_pose=0.0")
 
     pose_dict.update({
         "has_pose": False,
@@ -95,11 +95,11 @@ def set_pose_no_good_points(
     good_mask: np.ndarray,
 ) -> None:
     """
-    Випадок: keypoints є, але НУЛЬ спільно якісних.
+    Case: keypoints exist, but there are ZERO jointly good ones.
     """
     if log:
         log.section(f"[{pair_tag}] POSE")
-        log._print("немає спільно якісних точок — D_pose=0.0")
+        log._print("no jointly good keypoints — D_pose=0.0")
 
     pose_dict.update({
         "has_pose": True,
@@ -153,11 +153,11 @@ def fill_pose_full_debug(
     D_pose: float,
 ) -> None:
     """
-    Випадок: нормальні точки є, порахований D_pose.
-    Тут:
-      - розгортаємо diff/per_k/w_eff до повної довжини n_k
-      - оновлюємо pose_dict
-      - (опційно) друкуємо красиву табличку через DebugLog
+    Case: there are valid keypoints and D_pose has been computed.
+    Here:
+      - expand diff/per_k/w_eff to full length n_k
+      - update pose_dict
+      - (optionally) print a nice table via DebugLog
     """
     full_diff = np.full((n_k, 2), np.nan, dtype=float)
     full_perk = np.full((n_k,), np.nan, dtype=float)
@@ -166,7 +166,7 @@ def fill_pose_full_debug(
     used_idx = np.where(good_mask)[0]
     full_diff[used_idx] = diff_used
     full_perk[used_idx] = per_k_used
-    full_w[used_idx] = w_used  # Для w_eff — теж тільки used
+    full_w[used_idx] = w_used  # For w_eff — also only used ones
 
     pose_dict.update({
         "has_pose": True,
@@ -180,7 +180,7 @@ def fill_pose_full_debug(
         "D_pose": D_pose
     })
 
-    # ДРУК (опціонально)
+    # PRINT (optional)
     if log and log.enabled_print:
         log.section(f"[{pair_tag}] POSE")
         header = (
@@ -197,32 +197,32 @@ def fill_pose_full_debug(
             used_mask=good_mask
         )
         log.table(header, rows)
-        log._print(f"\nD_pose = {D_pose:.6f}  (по {int(used_idx.size)} точках)")
+        log._print(f"\nD_pose = {D_pose:.6f}  (over {int(used_idx.size)} keypoints)")
 
 
 # ---------- PRINT TRACKING RESULTS ----------
 
 def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = False):
     """
-    Красивий вивід результатів трекінгу за кадр:
-      - Summary active tracks
-      - Cost matrix з коректними Track IDs (row_track_ids)
-      - Парні логи по кожному активному треку (motion/pose/final)
-      - (опційно) повні таблиці по 25 точках для кожної пари
+    Nicely formatted output of tracking results for a frame:
+      - Summary of active tracks
+      - Cost matrix with correct Track IDs (row_track_ids)
+      - Pair logs for each active track (motion/pose/final)
+      - (optional) full 25-keypoint tables for each pair
     """
-      # DEBUG, можеш потім прибрати
+    # DEBUG, you can remove this later
 
     print("=" * 140)
-    print(f"         РЕЗУЛЬТАТИ ТРЕКІНГУ: {iteration + 1}")
+    print(f"         TRACKING RESULTS: {iteration + 1}")
     print("=" * 140)
 
-    # --- дістаємо штуки з логу кадру ---
+    # --- extract things from per-frame log ---
     active_tracks = log.get("active_tracks", [])
     C = np.array(log.get("cost_matrix", []))
     row_track_ids = log.get("row_track_ids", [])
 
-    # 1) ACTIVE TRACKS — коротко
-    print(f"\n{'active_tracks':<25}: [{len(active_tracks)} активних треків]")
+    # 1) ACTIVE TRACKS — brief
+    print(f"\n{'active_tracks':<25}: [{len(active_tracks)} active tracks]")
     for t in active_tracks:
         track_id = t.get('track_id', 'N/A')
         confirmed = t.get('confirmed', False)
@@ -234,16 +234,16 @@ def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = F
         print(f"  |-> ID {track_id} (H:{hits}/A:{age}): "
               f"CONFIRMED={str(confirmed):<5} | POS=({x_pos}, {y_pos})")
 
-    # 2) COST MATRIX — з коректними row IDs
+    # 2) COST MATRIX — with correct row IDs
     print()
     if C.size == 0:
-        print(f"{'cost_matrix':<25}: Порожня (не було збігів для порівняння)")
+        print(f"{'cost_matrix':<25}: Empty (no matches to compare)")
     else:
         rows, cols = C.shape
         print(f"{'cost_matrix':<25}: size={rows}x{cols}")
-        print("  | Рядки = Track ID (до апдейту), Стовпці = Detection Index")
+        print("  | Rows = Track ID (before update), Columns = Detection Index")
 
-        # заголовок
+        # header
         max_id_len = max((len(str(tid)) for tid in row_track_ids), default=3)
         column_width = 8
         header = "  | " + " " * (max_id_len + 9)
@@ -252,7 +252,7 @@ def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = F
         print(header)
         print("  |" + "-" * (len(header) - 3))
 
-        # рядки
+        # rows
         for i in range(rows):
             tid = row_track_ids[i] if i < len(row_track_ids) else "N/A"
             row_str = f"  | Track {str(tid):>{max_id_len}}: "
@@ -260,16 +260,16 @@ def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = F
                 row_str += f"{C[i, j]:{column_width}.2f} "
             print(row_str)
 
-    # 3) ПАРНІ ЛОГИ ПО КОЖНОМУ АКТИВНОМУ ТРЕКУ
-    print("\nPAIR LOGS (за треками):")
+    # 3) PER-TRACK PAIR LOGS
+    print("\nPAIR LOGS (by track):")
     for t in active_tracks:
         tid = t["track_id"]
         pairs = t.get("match_log", [])
         if not pairs:
-            print(f"  - Track {tid}: (логів немає)")
+            print(f"  - Track {tid}: (no logs)")
             continue
 
-        print(f"  - Track {tid}: {len(pairs)} пар(и)")
+        print(f"  - Track {tid}: {len(pairs)} pair(s)")
         for p in pairs:
             reason = p.get("final", {}).get("reason", "ok")
             cost = p.get("final", {}).get("cost", None)
@@ -289,7 +289,7 @@ def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = F
             used_count = pose.get("used_count", 0)
             D_pose = pose.get("D_pose", 0.0)
 
-            # короткий рядок по парі
+            # short line per pair
             print(f"     • det={det_j}, reason={reason}, "
                   f"d2={None if d2 is None else round(d2, 4)}, "
                   f"allowed={allowed}, "
@@ -297,7 +297,7 @@ def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = F
                   f"used_kps={used_count}, D_pose={round(D_pose, 4)}, "
                   f"final_cost={None if cost is None else round(cost, 4)}")
 
-            # (опційно) повна таблиця по 25 точках
+            # (optional) full table over 25 keypoints
             if show_pose_tables and pose and pose.get("trk_norm") is not None:
                 trk_norm = np.array(pose["trk_norm"], dtype=float)
                 det_norm = np.array(pose["det_norm"], dtype=float)
@@ -405,8 +405,8 @@ def print_gating_result(
 
     log.section(f"[pair {pair_tag}] RESULT")
     log._print(
-        f"Гейтинг відсік пару (d2={d2:.6f} > {cfg.chi2_gating:.6f}). "
-        f"Вартість = LARGE_COST={cfg.large_cost:g}"
+        f"Gating rejected the pair (d2={d2:.6f} > {cfg.chi2_gating:.6f}). "
+        f"Cost = LARGE_COST={cfg.large_cost:g}"
     )
 
 

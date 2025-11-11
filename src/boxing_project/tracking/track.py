@@ -15,11 +15,11 @@ class Detection:
 
 
 @dataclass
+@dataclass
 class Track:
-
     track_id: int
     kf: KalmanTracker
-    min_hits: int = 3
+    min_hits: int
 
     age: int = 0
     hits: int = 0

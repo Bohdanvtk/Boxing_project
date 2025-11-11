@@ -1,4 +1,8 @@
 # single_img_download.py
+
+# this script is used to process and download sample data, and some of this functions are used
+# to preprocess data with opens pose
+
 import os
 import sys
 import cv2
@@ -11,7 +15,7 @@ NUM_PEOPLE_MAX = 5
 SAVE_WIDTH = 900
 # ----------------------------
 
-# --- Імпорт OpenPose (раз) ---
+# --- Import OpenPose (once) ---
 OPENPOSE_PY = os.path.join(OPENPOSE_ROOT, 'build', 'python')
 if OPENPOSE_PY not in sys.path:
     sys.path.append(OPENPOSE_PY)
@@ -19,13 +23,11 @@ if OPENPOSE_PY not in sys.path:
 try:
     from openpose import pyopenpose as op
 
-
 except Exception as e:
     raise RuntimeError(
-        'Не вдалося імпортувати OpenPose. '
-        'Перевір, що OPENPOSE_ROOT вказує на корінь збірки OpenPose і Python API встановлено.'
+        'Failed to import OpenPose. '
+        'Make sure OPENPOSE_ROOT points to the OpenPose build root and that the Python API is installed.'
     ) from e
-
 
 
 BODY25_HEAD = {
@@ -36,7 +38,7 @@ BODY25_HEAD = {
 }
 
 
-# ---------- Геометрія / OpenPose утиліти ----------
+# ---------- Geometry / OpenPose utilities ----------
 def _compute_bbox(single_kps, conf_thresh):
     valid = single_kps[:, 2] > conf_thresh
     if not valid.any():
@@ -44,7 +46,6 @@ def _compute_bbox(single_kps, conf_thresh):
     xs = single_kps[valid, 0]
     ys = single_kps[valid, 1]
     return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
-
 
 
 def _draw_bbox_and_labels(img, kps, conf_thresh):
@@ -60,6 +61,7 @@ def _draw_bbox_and_labels(img, kps, conf_thresh):
             cv2.putText(img, f'Person {i+1}', (x1, max(10, y1-5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
     return bboxes
+
 
 def _person_center(single_kps, img_w, img_h, conf_thresh, fallback_bbox=None):
     conf = single_kps[:, 2]
@@ -95,12 +97,11 @@ def _head_abs_xy(single_kps, W, H, conf_th):
     return None
 
 
-
 def _nearest_head_dists_abs(kps_abs, W, H, conf_th):
     """
-    kps_abs: (num_people,25,3) у пікселях
-    Повертає np.array (NUM_PEOPLE_MAX,) — відстані до найближчої голови,
-    нормалізовані на діагональ кадру. Для пустих/паддинг людей -> 0.
+    kps_abs: (num_people, 25, 3) in pixels
+    Returns np.array (NUM_PEOPLE_MAX,) — distances to the nearest head,
+    normalized by the frame diagonal. For empty/padded people -> 0.
     """
     diag = np.hypot(W, H)
     dists = np.zeros((NUM_PEOPLE_MAX,), dtype=np.float32)
@@ -109,7 +110,7 @@ def _nearest_head_dists_abs(kps_abs, W, H, conf_th):
         return dists
 
     P = min(kps_abs.shape[0], NUM_PEOPLE_MAX)
-    heads = [ _head_abs_xy(kps_abs[i], W, H, conf_th) for i in range(P) ]
+    heads = [_head_abs_xy(kps_abs[i], W, H, conf_th) for i in range(P)]
 
     for i in range(P):
         hi = heads[i]
@@ -130,7 +131,7 @@ def _nearest_head_dists_abs(kps_abs, W, H, conf_th):
                 best = d
         dists[i] = (best / diag) if best is not None else 0.0
 
-    # якщо людей менше NUM_PEOPLE_MAX — решта нулі (вже так і є)
+    # if there are fewer than NUM_PEOPLE_MAX people — the rest are zeros (already so)
     return dists
 
 
@@ -138,12 +139,10 @@ def _normalize_xy(x, y, cx, cy, W, H):
     return (x - cx) / float(W), (y - cy) / float(H)
 
 
-
-
 def _preprocess_image(opWrapper, img_path, conf_threshold=0.1):
     img = cv2.imread(img_path)
     if img is None:
-        raise RuntimeError(f'Не вдалося відкрити зображення {img_path}')
+        raise RuntimeError(f'Failed to open image {img_path}')
     h, w = img.shape[:2]
     if w > SAVE_WIDTH:
         scale = SAVE_WIDTH / w
@@ -158,12 +157,12 @@ def _preprocess_image(opWrapper, img_path, conf_threshold=0.1):
 
     result = datums[0]
     out = result.cvOutputData.copy() if hasattr(result, 'cvOutputData') else img.copy()
-    kps = result.poseKeypoints  # shape: (num_people, 25, 3) або None
+    kps = result.poseKeypoints  # shape: (num_people, 25, 3) or None
 
     kps5 = np.zeros((NUM_PEOPLE_MAX, 25, 5), dtype=np.float32)
 
     if kps is None or len(kps) == 0:
-        # Нікого не знайдено → повертаємо порожню розмітку (нулями)
+        # Nobody detected → return empty annotation (zeros)
         return out, kps5
 
     bboxes = _draw_bbox_and_labels(out, kps, conf_threshold)
@@ -183,39 +182,39 @@ def _preprocess_image(opWrapper, img_path, conf_threshold=0.1):
                 nx, ny = _normalize_xy(x, y, cx, cy, W, H)
                 kps5[i, j, 0] = nx  # nx
                 kps5[i, j, 1] = ny  # ny
-                kps5[i, j, 2] = c  # conf
-                kps5[i, j, 3] = 1.0  # vis_flag
+                kps5[i, j, 2] = c   # conf
+                kps5[i, j, 3] = 1.0 # vis_flag
 
-            # 5-й канал — однаковий скаляр по всіх 25 точках цієї людини
+            # 5th channel — same scalar for all 25 keypoints of this person
         kps5[i, :, 4] = dists[i]
     return out, kps5
 
 
-# ---------- Публічна функція для імпорту ----------
+# ---------- Public function for import ----------
 def process_image(input_path):
     """
-    Обробляє одне зображення OpenPose і повертає:
-      - annotated_img: numpy.ndarray (BGR), анотоване зображення
-      - kps4: np.ndarray форми (NUM_PEOPLE_MAX, 25, 4): (nx, ny, conf, vis_flag)
+    Processes a single image with OpenPose and returns:
+      - annotated_img: numpy.ndarray (BGR), annotated image
+      - kps4: np.ndarray of shape (NUM_PEOPLE_MAX, 25, 4): (nx, ny, conf, vis_flag)
 
-    input_path може бути:
-      - повний шлях до файлу-зображення, або
-      - шлях до теки, яка містить ОДНЕ зображення (буде взято перший .jpg/.jpeg/.png)
+    input_path can be:
+      - full path to an image file, or
+      - path to a directory that contains ONE image (the first .jpg/.jpeg/.png will be taken)
     """
-    # 1) Якщо передано теку — знайдемо файл зображення
+    # 1) If a directory is passed — find an image file inside it
     img_path = input_path
     if os.path.isdir(input_path):
         imgs = [f for f in os.listdir(input_path)
                 if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
         if not imgs:
-            raise RuntimeError(f'У теці {input_path} не знайдено .jpg/.jpeg/.png')
-        # беремо перший знайдений
+            raise RuntimeError(f'No .jpg/.jpeg/.png found in directory {input_path}')
+        # take the first found
         img_path = os.path.join(input_path, sorted(imgs)[0])
 
     if not os.path.isfile(img_path):
-        raise RuntimeError(f'Шлях не є файлом зображення: {img_path}')
+        raise RuntimeError(f'Path is not an image file: {img_path}')
 
-    # 2) Налаштування OpenPose (без збереження на диск)
+    # 2) OpenPose settings (without saving to disk)
     params = dict()
     params['model_folder'] = os.path.join(OPENPOSE_ROOT, 'models')
     params['hand'] = False
@@ -234,12 +233,12 @@ def process_image(input_path):
     return annotated, kps4
 
 
-# ---------- CLI (не виконується при імпорті) ----------
+# ---------- CLI (not executed on import) ----------
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('input_path', help='Шлях до зображення або теки з одним зображенням')
+    parser.add_argument('input_path', help='Path to an image or a directory with a single image')
     args = parser.parse_args()
 
     img, npz = process_image(args.input_path)
-    print('Готово. Форма img:', img.shape, '| Форма kps5:', npz.shape)
+    print('Done. img shape:', img.shape, '| kps5 shape:', npz.shape)

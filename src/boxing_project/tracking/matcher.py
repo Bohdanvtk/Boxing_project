@@ -26,18 +26,12 @@ from .tracking_debug import (
 
 @dataclass
 class MatchConfig:
-    # Вага між рухом і позою: C = alpha*D_motion + (1-alpha)*D_pose
-    alpha: float = 0.8
-    # χ^2-поріг (df=2)
-    chi2_gating: float = 9.21  # p≈0.99
-    # Вартість для заборонених пар
-    large_cost: float = 1e6
-    # (зарезервовано під альтернативні нормалізації масштабу)
-    pose_scale_eps: float = 1e-6
-    # Ваги для ключових точок (якщо None — всі 1.0)
-    keypoint_weights: Optional[np.ndarray] = None
-    # Мінімальний конфіденс точки
-    min_kp_conf: float = 0.05
+    alpha: float
+    chi2_gating: float
+    large_cost: float
+    pose_scale_eps: float
+    keypoint_weights: Optional[np.ndarray]
+    min_kp_conf: float
 
 
 def _normalize_pose(kp: np.ndarray) -> Tuple[np.ndarray, float]:
@@ -60,8 +54,8 @@ def _pose_distance(
     pair_tag: str = ""
 ) -> Tuple[float, Dict[str, Any]]:
     """
-    Рахує D_pose та збирає детальний словник для логів.
-    Повертає (dist, pose_dict).
+    calculates d_pose, and return a dict for logs.
+     (dist, pose_dict).
     """
     pose_dict: Dict[str, Any] = {}
 
@@ -86,7 +80,7 @@ def _pose_distance(
         set_pose_no_good_points(pose_dict, log, pair_tag, good)
         return 0.0, pose_dict
 
-    # Нормалізація
+    # normalization
     kpt_tn, _ = _normalize_pose(kpt_t)
     kpt_dn, _ = _normalize_pose(kpt_d)
 
@@ -172,7 +166,7 @@ def build_cost_matrix(
                 "allowed": bool(ok),
             }
 
-            # 1) Гейтинг відсікає пару
+            # 1) gating prunes a pair
             if not ok:
                 C[i, j] = cfg.large_cost
                 fill_pair_gated_out(pair_obj, cfg, d_motion)
@@ -180,7 +174,7 @@ def build_cost_matrix(
                 print_gating_result(log, pair_tag, d2, cfg)
                 continue
 
-            # 2) Пара пройшла гейтинг → рахуємо D_pose і фінальний cost
+            # 2) pair ok → count D_pose and final cost
             d_pose, pose_dict = _pose_distance(
                 trk, det, cfg, log=log, pair_tag=pair_tag
             )
@@ -198,6 +192,8 @@ def build_cost_matrix(
             )
             log.add_pair(pair_obj)
             print_pair_result(log, pair_tag, cfg, d_motion, d_pose, cost)
+
+
 
     return C, log.store
 
@@ -244,19 +240,17 @@ def match_tracks_and_detections(
     tracks: List[Track],
     detections: List[Detection],
     cfg: Optional[MatchConfig] = None,
-    show: bool = True,
+    debug: bool = True,
     sink: Optional[Callable[[str], None]] = None,
     config_path: Optional[Union[str, Path]] = None,
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int], np.ndarray, Dict[str, Any]]:
     """
-    Тепер повертаємо й словник логу, щоб ти мав його на рівні кадру.
+    Now return dict to log so that I will have a log on a frame level.
 
-    Якщо ``cfg`` не передано, параметри матчингу зчитуються з YAML-файлу
-    (``config_path`` або стандартний ``DEFAULT_TRACKING_CONFIG_PATH``).
     """
     if cfg is None:
         cfg = _load_match_config_from_yaml(config_path)
 
-    C, log_matcher = build_cost_matrix(tracks, detections, cfg, show=show, sink=sink)
+    C, log_matcher = build_cost_matrix(tracks, detections, cfg, show=debug, sink=sink)
     matches, um_tr, um_dt = linear_assignment_with_unmatched(C, cfg.large_cost)
     return matches, um_tr, um_dt, C, log_matcher

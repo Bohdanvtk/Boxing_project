@@ -15,12 +15,11 @@ def _q_block(dt: float, var: float) -> np.ndarray:
 class KalmanTracker:
 
     def __init__(self,
-                 x0: np.ndarray| list,
-                 dt: float = 1.0,
-                 process_var = 1.0,
-                 measure_var = 10.0,
-                 p0=1e3
-
+                 x0: np.ndarray | list,
+                 dt: float,
+                 process_var: float,
+                 measure_var: float,
+                 p0: float,
                  ):
 
         x0 = np.asarray(x0, dtype=float).reshape(-1)
@@ -104,11 +103,11 @@ class KalmanTracker:
         return d2
 
     def get_state(self) -> np.ndarray:
-        """Поточний стан x як вектор (4,)."""
+        """curent state as a (4, ) vector."""
         return self.kf.x.reshape(-1).copy()
 
     def get_cov(self) -> np.ndarray:
-        """Поточна коваріація P (4x4)."""
+        """current covariation P (4x4)."""
         return self.kf.P.copy()
 
     @property

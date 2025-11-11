@@ -31,6 +31,7 @@ def make_match_config(cfg: dict) -> MatchConfig:
     min_kp_conf = float(_get(cfg, "tracking.matching.min_kp_conf", 0.05))
     keypoint_weights = _get(cfg, "tracking.matching.keypoint_weights", None)
 
+    pose_scale_eps = float(_get(cfg, "tracking.matching.pose_scale_eps", 1e-6))
 
     if keypoint_weights is not None and not isinstance(keypoint_weights, (list, tuple)):
         raise ValueError("keypoint_weights має бути списком чисел або None")
@@ -42,6 +43,7 @@ def make_match_config(cfg: dict) -> MatchConfig:
         large_cost=large_cost,
         min_kp_conf=min_kp_conf,
         keypoint_weights=keypoint_weights,
+        pose_scale_eps=pose_scale_eps
     )
 
 def make_tracker_config(cfg: dict, match_cfg: MatchConfig) -> TrackerConfig:

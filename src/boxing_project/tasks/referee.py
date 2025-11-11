@@ -22,7 +22,7 @@ class RefereeTask:
             "FEAT_PER_JOINT": int(t["feat_per_joint"]),
         }
 
-    # ---- завантаження одного семплу
+    # ---- loading of one sample
     @staticmethod
     def _labels_to_one_hot(txt: str, P: int) -> np.ndarray:
         txt = re.sub(r'[,\s]+', '', txt)
@@ -40,13 +40,13 @@ class RefereeTask:
         P = keypoints.shape[0]
         with open(os.path.join(folder_path, 'label.txt'), 'r') as f:
             label = RefereeTask._labels_to_one_hot(f.readline(), P)
-        # проста аугментація прикладу (як у тебе)
+        # simple augmentation
         if np.random.rand() < 0.5:
             perm = np.random.permutation(keypoints.shape[0])
             keypoints, label = keypoints[perm], label[perm]
-        return keypoints, label, {}  # extra-поля не потрібні
+        return keypoints, label, {}
 
-    # ---- модель
+    # ---- model
     @staticmethod
     def _l2(alpha=1e-4): return regularizers.l2(alpha)
 

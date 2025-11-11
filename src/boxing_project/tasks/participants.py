@@ -22,7 +22,7 @@ class ParticipantsTask:
             "FEAT_PER_JOINT": int(t["feat_per_joint"]),
         }
 
-    # ---- завантаження одного семплу
+    # ---- loading of one sample
     @staticmethod
     def _read_int_vector(txt_path: str, length: int, default: int = 0) -> np.ndarray:
         try:
@@ -77,14 +77,14 @@ class ParticipantsTask:
     @staticmethod
     def make_sample_weights(X: np.ndarray, extras: dict, dims: dict, cfg: dict):
         J = float(dims["JOINTS_PER_PERSON"])
-        # якщо valid_counts є — використовуємо їх
+        # if valid counts exist we use them
         if "valid_counts" in extras and isinstance(extras["valid_counts"], np.ndarray) \
                 and extras["valid_counts"].shape[0] == X.shape[0]:
             valid_counts = extras["valid_counts"]
         else:
-            # fallback тільки якщо є 4-та фіча
+            # fallback only if exist 4th feature
             if X.shape[-1] <= 3:
-                # немає каналу is_valid → рівні ваги
+                # no is_valid → same weights
                 valid_counts = np.full(shape=X.shape[:2], fill_value=J, dtype=np.float32)
             else:
                 is_valid = tf.convert_to_tensor(X)[..., 3] > 0.5
@@ -95,7 +95,7 @@ class ParticipantsTask:
 
     @staticmethod
     def postprocess_val(model, X_val: np.ndarray, extras: dict, dims: dict, cfg: dict):
-        # приклад: top-3 індекси
+        # top-3 indexes
         P = int(dims["NUM_PEOPLE_MAX"])
         k = min(3, P)
         probs = model.predict(X_val, verbose=0)
