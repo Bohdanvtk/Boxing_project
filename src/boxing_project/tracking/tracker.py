@@ -1,13 +1,16 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import List, Tuple, Dict, Any, Optional
-from collections import defaultdict
 import copy
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+from typing import List, Tuple, Dict, Any, Optional, Union
+from collections import defaultdict
 import numpy as np
 
 from .kalman import KalmanTracker
 from .track import Track, Detection
 from .matcher import MatchConfig, match_tracks_and_detections
+from . import DEFAULT_TRACKING_CONFIG_PATH
 
 
 # ----------------------------- #
@@ -125,18 +128,68 @@ def openpose_people_to_detections(
 #            ТРЕКЕР              #
 # ----------------------------- #
 
+@lru_cache(maxsize=None)
+def _cached_tracking_config(path: str):
+    """Cache loader so multiple trackers reuse the parsed YAML."""
+
+    from src.boxing_project.utils.config import load_tracking_config
+
+    return load_tracking_config(path)
+
+
+def _load_tracker_config_from_yaml(
+    config_path: Optional[Union[str, Path]] = None,
+) -> Tuple[TrackerConfig, Dict[str, Any]]:
+    """Load ``TrackerConfig`` and raw dictionary from YAML file."""
+
+    resolved = Path(config_path) if config_path is not None else DEFAULT_TRACKING_CONFIG_PATH
+    tracker_cfg, match_cfg, raw_cfg = _cached_tracking_config(str(resolved))
+    tracker_cfg_copy = copy.deepcopy(tracker_cfg)
+    # Ensure nested MatchConfig is also unique per tracker instance.
+    tracker_cfg_copy.match = copy.deepcopy(match_cfg)
+    return tracker_cfg_copy, copy.deepcopy(raw_cfg)
+
+
 class MultiObjectTracker:
     """
     Керує списком треків:
       predict → build C → Hungarian → update → керування життям.
+
+    Якщо ``cfg`` не передано, налаштування будуть зчитані з YAML-файлу через
+    ``utils.config.load_tracking_config`` (``config_path`` або стандартний
+    ``DEFAULT_TRACKING_CONFIG_PATH``).
     """
 
-    def __init__(self, cfg: Optional[TrackerConfig] = None):
-        self.cfg = cfg or TrackerConfig()
+    def __init__(
+        self,
+        cfg: Optional[TrackerConfig] = None,
+        config_path: Optional[Union[str, Path]] = None,
+    ):
+        if cfg is not None and config_path is not None:
+            raise ValueError("Provide either cfg or config_path, not both")
+
+        if cfg is None:
+            cfg_loaded, raw_cfg = _load_tracker_config_from_yaml(config_path)
+            self.cfg = cfg_loaded
+            self._raw_config = raw_cfg
+            self.config_path: Optional[Path] = (
+                Path(config_path) if config_path is not None else DEFAULT_TRACKING_CONFIG_PATH
+            )
+        else:
+            self.cfg = copy.deepcopy(cfg)
+            self._raw_config = None
+            self.config_path = Path(config_path) if config_path is not None else None
         self.tracks: List[Track] = []
         self._next_id: int = 1
 
     # ---- службові ---- #
+
+    def get_config_dict(self) -> Optional[Dict[str, Any]]:
+        """Return a deep copy of the raw YAML configuration used for this tracker."""
+
+        if self._raw_config is None:
+            return None
+        return copy.deepcopy(self._raw_config)
 
     def _new_track(self, det: Detection) -> Track:
         kf = KalmanTracker(
