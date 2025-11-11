@@ -2,68 +2,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Callable, Dict, Any
 import numpy as np
-from PIL.EpsImagePlugin import has_ghostscript
 from scipy.optimize import linear_sum_assignment
 
 from .track import Track, Detection
 
+from .tracking_debug import (
+    DebugLog,
+    create_matcher_log,
+    make_pair_base,
+    fill_pair_gated_out,
+    fill_pair_ok,
+    print_gating_result,
+    print_pair_result,
+    set_pose_no_keypoints,
+    set_pose_no_good_points,
+    fill_pose_full_debug,
+)
 
-# --------- Утиліти логування ---------
-class DebugLog:
-    """
-    Збирає структурований лог (dict) + за бажанням друкує; ВСЕГДА буферизує рядки.
-    """
-    def __init__(
-        self,
-        enabled_print: bool = False,
-        sink: Optional[Callable[[str], None]] = None,
-    ):
-        self.enabled_print = enabled_print
-        self.sink = sink if sink is not None else print
-        self.buffer: List[str] = []          # ← буфер усіх рядків
-
-        self.store: Dict[str, Any] = {
-            "config": {},
-            "shape": [0, 0],
-            "pairs": [],
-            "print_chunks": self.buffer,     # ← буфер віддамо нагору
-        }
-
-    # --- друк / буфер ---
-    def _emit(self, line: str):
-        self.buffer.append(line)
-        if self.enabled_print:
-            self.sink(line)
-
-    def _print(self, msg: str):
-        self._emit(msg)
-
-    def section(self, title: str):
-        title = title
-        bar = "—" * max(8, len(title))
-        self._emit("")         # порожній рядок перед секцією
-        self._emit(title)
-        self._emit(bar)
-
-    def table(self, header: str, rows: List[str]):
-        if header:
-            self._emit(header)
-        for r in rows:
-            self._emit(r)
-
-    # --- запис у словник ---
-    def add_pair(self, pair_obj: Dict[str, Any]):
-        self.store["pairs"].append(pair_obj)
-
-    def set_meta(self, config: "MatchConfig", shape: Tuple[int, int]):
-        self.store["config"] = {
-            "alpha": config.alpha,
-            "chi2_gating": config.chi2_gating,
-            "large_cost": config.large_cost,
-            "min_kp_conf": config.min_kp_conf,
-            "has_keypoint_weights": config.keypoint_weights is not None,
-        }
-        self.store["shape"] = [int(shape[0]), int(shape[1])]
 
 
 @dataclass
@@ -94,32 +49,6 @@ def _normalize_pose(kp: np.ndarray) -> Tuple[np.ndarray, float]:
     return centered / max(scale, 1e-12), scale
 
 
-# --- форматуємо рядки для друку таблиці (не для словника) ---
-def _format_pose_rows(
-    k_idx: np.ndarray,
-    trk_norm: np.ndarray,
-    det_norm: np.ndarray,
-    diff: np.ndarray,
-    per_k: np.ndarray,
-    w_eff: np.ndarray,
-    used_mask: np.ndarray
-) -> List[str]:
-    rows = []
-    for i, k in enumerate(k_idx):
-        tx, ty = trk_norm[k]
-        dx_, dy_ = det_norm[k]
-        ddx, ddy = diff[i]
-        used = bool(used_mask[k])
-        rows.append(
-            f"{k:2d} | "
-            f"{tx:>7.4f} {ty:>7.4f} | "
-            f"{dx_:>7.4f} {dy_:>7.4f} | "
-            f"{ddx:>7.4f} {ddy:>7.4f} | "
-            f"{per_k[i]:>7.4f} | {w_eff[i]:>7.4f} | {str(used):>5s}"
-        )
-    return rows
-
-
 def _pose_distance(
     track: Track,
     det: Detection,
@@ -134,20 +63,7 @@ def _pose_distance(
     pose_dict: Dict[str, Any] = {}
 
     if track.last_keypoints is None or det.keypoints is None:
-        if log:
-            log.section(f"[{pair_tag}] POSE")
-            log._print("немає поз — D_pose=0.0")
-        pose_dict.update({
-            "has_pose": False,
-            "good_mask": None,
-            "trk_norm": None,
-            "det_norm": None,
-            "diff": None,
-            "per_k": None,
-            "w_eff": None,
-            "used_count": 0,
-            "D_pose": 0.0
-        })
+        set_pose_no_keypoints(pose_dict, log, pair_tag)
         return 0.0, pose_dict
 
     kpt_t = np.asarray(track.last_keypoints, dtype=float)
@@ -164,20 +80,7 @@ def _pose_distance(
     good = (good_t & good_d)
 
     if not np.any(good):
-        if log:
-            log.section(f"[{pair_tag}] POSE")
-            log._print("немає спільно якісних точок — D_pose=0.0")
-        pose_dict.update({
-            "has_pose": True,
-            "good_mask": good.astype(bool).tolist(),
-            "trk_norm": None,
-            "det_norm": None,
-            "diff": None,
-            "per_k": None,
-            "w_eff": None,
-            "used_count": 0,
-            "D_pose": 0.0
-        })
+        set_pose_no_good_points(pose_dict, log, pair_tag, good)
         return 0.0, pose_dict
 
     # Нормалізація
@@ -197,46 +100,19 @@ def _pose_distance(
     w_used = w_used * 0.5 * (conf_t[good] + conf_d[good])
     D_pose = float((w_used * per_k_used).sum() / (w_used.sum() + 1e-12))
 
-    # Розгортка до повної довжини (25) для словника/таблиці
-    full_diff = np.full((n_k, 2), np.nan, dtype=float)
-    full_perk = np.full((n_k,), np.nan, dtype=float)
-    full_w = np.full((n_k,), np.nan, dtype=float)
-    used_idx = np.where(good)[0]
-    full_diff[used_idx] = diff_used
-    full_perk[used_idx] = per_k_used
-    # Для w_eff — теж тільки used
-    full_w[used_idx] = w_used
-
-    pose_dict.update({
-        "has_pose": True,
-        "good_mask": good.astype(bool).tolist(),
-        "trk_norm": kpt_tn.tolist(),
-        "det_norm": kpt_dn.tolist(),
-        "diff": full_diff.tolist(),
-        "per_k": full_perk.tolist(),
-        "w_eff": full_w.tolist(),
-        "used_count": int(used_idx.size),
-        "D_pose": D_pose
-    })
-
-    # ДРУК (опціонально)
-    if log and log.enabled_print:
-        log.section(f"[{pair_tag}] POSE")
-        header = (
-            " k |    trk_x    trk_y |    det_x    det_y |      dx       dy |   ||d||  |  w_eff | used\n"
-            "---+--------------------+--------------------+------------------+---------+--------+------"
-        )
-        rows = _format_pose_rows(
-            k_idx=np.arange(n_k),
-            trk_norm=kpt_tn,
-            det_norm=kpt_dn,
-            diff=full_diff,
-            per_k=full_perk,
-            w_eff=full_w,
-            used_mask=good
-        )
-        log.table(header, rows)
-        log._print(f"\nD_pose = {D_pose:.6f}  (по {int(used_idx.size)} точках)")
+    fill_pose_full_debug(
+        pose_dict=pose_dict,
+        log=log,
+        pair_tag=pair_tag,
+        n_k=n_k,
+        good_mask=good,
+        kpt_tn=kpt_tn,
+        kpt_dn=kpt_dn,
+        diff_used=diff_used,
+        per_k_used=per_k_used,
+        w_used=w_used,
+        D_pose=D_pose,
+    )
 
     return D_pose, pose_dict
 
@@ -269,93 +145,56 @@ def build_cost_matrix(
     show: bool = True,
     sink: Optional[Callable[[str], None]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """
-    Будує матрицю C (n_tracks x n_dets) і ПОВЕРТАЄ:
-      - C
-      - log_matcher (великий словник з деталями по кожній парі)
-
-    log_matcher["pairs"] — список таких об’єктів:
-      {
-        "track_index": i, "det_index": j,
-        "motion": {"d2": ..., "d_motion": ..., "allowed": ...},
-        "pose": {
-           "has_pose": bool,
-           "good_mask": [bool]*K,
-           "trk_norm": [[x,y]]*K,
-           "det_norm": [[x,y]]*K,
-           "diff": [[dx,dy]]*K (NaN для не-used),
-           "per_k": [float]*K (NaN для не-used),
-           "w_eff": [float]*K (NaN для не-used),
-           "used_count": int,
-           "D_pose": float
-        },
-        "final": {
-           "alpha": cfg.alpha,
-           "cost": float,
-           "components": {"d_motion": ..., "d_pose": ...},
-           "reason": "ok" | "gated_out"
-        }
-      }
-    """
     n_tracks, n_dets = len(tracks), len(detections)
-    if n_tracks == 0 or n_dets == 0:
-        log = DebugLog(enabled_print=show, sink=sink)
-        log.set_meta(cfg, (n_tracks, n_dets))
-        return np.zeros((n_tracks, n_dets), dtype=float), log.store
+    shape = (n_tracks, n_dets)
 
-    C = np.zeros((n_tracks, n_dets), dtype=float)
-    log = DebugLog(enabled_print=show, sink=sink)
-    log.set_meta(cfg, (n_tracks, n_dets))
+    if n_tracks == 0 or n_dets == 0:
+        log = create_matcher_log(cfg, shape, show=show, sink=sink)
+        return np.zeros(shape, dtype=float), log.store
+
+    C = np.zeros(shape, dtype=float)
+    log = create_matcher_log(cfg, shape, show=show, sink=sink)
 
     for i, trk in enumerate(tracks):
         for j, det in enumerate(detections):
             pair_tag = f"T{i}↔D{j}"
-            pair_obj: Dict[str, Any] = {"track_index": i, "det_index": j}
+            pair_obj: Dict[str, Any] = make_pair_base(i, j)
 
-            d_motion, ok, d2 = _motion_cost_with_gating(trk, det, cfg, log=log, pair_tag=pair_tag)
-            pair_obj["motion"] = {"d2": d2, "d_motion": d_motion, "allowed": bool(ok)}
+            d_motion, ok, d2 = _motion_cost_with_gating(
+                trk, det, cfg, log=log, pair_tag=pair_tag
+            )
+            pair_obj["motion"] = {
+                "d2": d2,
+                "d_motion": d_motion,
+                "allowed": bool(ok),
+            }
 
+            # 1) Гейтинг відсікає пару
             if not ok:
                 C[i, j] = cfg.large_cost
-                pair_obj["pose"] = {
-                    "has_pose": False, "good_mask": None, "trk_norm": None, "det_norm": None,
-                    "diff": None, "per_k": None, "w_eff": None, "used_count": 0, "D_pose": 0.0
-                }
-                pair_obj["final"] = {
-                    "alpha": cfg.alpha,
-                    "cost": float(cfg.large_cost),
-                    "components": {"d_motion": d_motion, "d_pose": 0.0},
-                    "reason": "gated_out"
-                }
+                fill_pair_gated_out(pair_obj, cfg, d_motion)
                 log.add_pair(pair_obj)
-
-                if show:
-                    log.section(f"[pair {pair_tag}] RESULT")
-                    log._print(f"Гейтинг відсік пару (d2={d2:.6f} > {cfg.chi2_gating:.6f}). "
-                               f"Вартість = LARGE_COST={cfg.large_cost:g}")
+                print_gating_result(log, pair_tag, d2, cfg)
                 continue
 
-            d_pose, pose_dict = _pose_distance(trk, det, cfg, log=log, pair_tag=pair_tag)
+            # 2) Пара пройшла гейтинг → рахуємо D_pose і фінальний cost
+            d_pose, pose_dict = _pose_distance(
+                trk, det, cfg, log=log, pair_tag=pair_tag
+            )
 
             cost = cfg.alpha * d_motion + (1.0 - cfg.alpha) * d_pose
             C[i, j] = cost
 
-            pair_obj["pose"] = pose_dict
-            pair_obj["final"] = {
-                "alpha": cfg.alpha,
-                "cost": float(cost),
-                "components": {"d_motion": float(d_motion), "d_pose": float(d_pose)},
-                "reason": "ok"
-            }
+            fill_pair_ok(
+                pair_obj=pair_obj,
+                cfg=cfg,
+                d_motion=d_motion,
+                d_pose=d_pose,
+                cost=cost,
+                pose_dict=pose_dict,
+            )
             log.add_pair(pair_obj)
-
-            if show:
-                log.section(f"[pair {pair_tag}] RESULT")
-                alpha = cfg.alpha
-                log._print(f"α = {alpha:.4f}")
-                log._print(
-                    f"final = α·d_motion + (1-α)·D_pose = {alpha:.4f}·{d_motion:.6f} + {(1.0 - alpha):.4f}·{d_pose:.6f} = {cost:.6f}")
-
+            print_pair_result(log, pair_tag, cfg, d_motion, d_pose, cost)
 
     return C, log.store
 

@@ -4,6 +4,12 @@ import cv2
 from pathlib import Path
 import numpy as np
 
+from src.boxing_project.tracking.tracking_debug import print_tracking_results
+from src.boxing_project.tracking.tracker import MultiObjectTracker, TrackerConfig
+from src.boxing_project.tracking.matcher import MatchConfig
+
+
+
 OPENPOSE_ROOT = '/home/bohdan/openpose'
 SAVE_WIDTH = 700
 IMAGE_DIR_PATH = '/home/bohdan/Документи/Samples/Images/boxing/Processed_data/output/GH098416_00051'
@@ -77,132 +83,6 @@ def bbox(kps, conf_threshold=0.1):
     return x1, y1, x2, y2
 
 
-def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = False):
-    """
-    Красивий вивід результатів трекінгу за кадр:
-      - Summary active tracks
-      - Cost matrix з коректними Track IDs (row_track_ids)
-      - Парні логи по кожному активному треку (motion/pose/final)
-      - (опційно) повні таблиці по 25 точках для кожної пари
-    """
-    print("=" * 40)
-    print(f"         РЕЗУЛЬТАТИ ТРЕКІНГУ: {iteration + 1}")
-    print("=" * 40)
-
-
-
-    active_tracks = log.get("active_tracks", [])
-    C = np.array(log.get("cost_matrix", []))
-    row_track_ids = log.get("row_track_ids", [])  # <— те, що ми додали в update()
-
-    # 1) ACTIVE TRACKS — коротко
-    print(f"\n{'active_tracks':<25}: [{len(active_tracks)} активних треків]")
-    for t in active_tracks:
-        track_id = t.get('track_id', 'N/A')
-        confirmed = t.get('confirmed', False)
-        hits = t.get('hits', 0)
-        age = t.get('age', 0)
-        pos = t.get('pos', (0.0, 0.0))
-        x_pos = round(pos[0], 2) if pos else 0.0
-        y_pos = round(pos[1], 2) if pos else 0.0
-        print(f"  |-> ID {track_id} (H:{hits}/A:{age}): "
-              f"CONFIRMED={str(confirmed):<5} | POS=({x_pos}, {y_pos})")
-
-    # 2) COST MATRIX — з коректними row IDs
-    print()
-    if C.size == 0:
-        print(f"{'cost_matrix':<25}: Порожня (не було збігів для порівняння)")
-    else:
-        rows, cols = C.shape
-        print(f"{'cost_matrix':<25}: size={rows}x{cols}")
-        print("  | Рядки = Track ID (до апдейту), Стовпці = Detection Index")
-
-        # заголовок
-        max_id_len = max((len(str(tid)) for tid in row_track_ids), default=3)
-        column_width = 8
-        header = "  | " + " " * (max_id_len + 9)
-        for j in range(cols):
-            header += f"Det {j:^{column_width - 4}}"
-        print(header)
-        print("  |" + "-" * (len(header) - 3))
-
-        # рядки
-        for i in range(rows):
-            tid = row_track_ids[i] if i < len(row_track_ids) else "N/A"
-            row_str = f"  | Track {str(tid):>{max_id_len}}: "
-            for j in range(cols):
-                row_str += f"{C[i, j]:{column_width}.2f} "
-            print(row_str)
-
-    # 3) ПАРНІ ЛОГИ ПО КОЖНОМУ АКТИВНОМУ ТРЕКУ
-    print("\nPAIR LOGS (за треками):")
-    for t in active_tracks:
-        tid = t["track_id"]
-        pairs = t.get("match_log", [])
-        if not pairs:
-            print(f"  - Track {tid}: (логів немає)")
-            continue
-
-        print(f"  - Track {tid}: {len(pairs)} пар(и)")
-        for p in pairs:
-            reason = p.get("final", {}).get("reason", "ok")
-            cost = p.get("final", {}).get("cost", None)
-            d_motion = p.get("final", {}).get("components", {}).get("d_motion", None)
-            d_pose = p.get("final", {}).get("components", {}).get("d_pose", None)
-            det_j = p.get("det_index", None)
-
-            motion = p.get("motion")
-            if motion is not None:
-                d2 = motion.get("d2", None)
-                allowed = motion.get("allowed", None)
-            else:
-                d2 = None
-                allowed = None
-
-            pose = p.get("pose") or {}
-            used_count = pose.get("used_count", 0)
-            D_pose = pose.get("D_pose", 0.0)
-
-            # короткий рядок по парі
-            print(f"     • det={det_j}, reason={reason}, "
-                  f"d2={None if d2 is None else round(d2, 4)}, "
-                  f"allowed={allowed}, "
-                  f"d_motion={None if d_motion is None else round(d_motion, 4)}, "
-                  f"used_kps={used_count}, D_pose={round(D_pose, 4)}, "
-                  f"final_cost={None if cost is None else round(cost, 4)}")
-
-            # (опційно) повна таблиця по 25 точках
-            if show_pose_tables and pose and pose.get("trk_norm") is not None:
-                trk_norm = np.array(pose["trk_norm"], dtype=float)
-                det_norm = np.array(pose["det_norm"], dtype=float)
-                diff = np.array(pose["diff"], dtype=float)
-                per_k = np.array(pose["per_k"], dtype=float)
-                w_eff = np.array(pose["w_eff"], dtype=float)
-                good_mask = np.array(pose["good_mask"], dtype=bool)
-
-                print("       k |    trk_x    trk_y |    det_x    det_y |      dx       dy |   ||d||  |  w_eff | used")
-                print("      ---+--------------------+--------------------+------------------+---------+--------+------")
-                K = trk_norm.shape[0]
-                for k in range(K):
-                    tx, ty = trk_norm[k]
-                    dx_, dy_ = det_norm[k]
-                    ddx, ddy = diff[k]
-                    perk = per_k[k]
-                    ww = w_eff[k]
-                    used = bool(good_mask[k])
-                    def fmt(v):
-                        return "   nan  " if (v is None or np.isnan(v)) else f"{v:7.4f}"
-                    print(f"      {k:2d} | "
-                          f"{fmt(tx)} {fmt(ty)} | {fmt(dx_)} {fmt(dy_)} | "
-                          f"{fmt(ddx)} {fmt(ddy)} | "
-                          f"{'   nan  ' if np.isnan(perk) else f'{perk:7.4f}'} | "
-                          f"{'   nan ' if np.isnan(ww) else f'{ww:7.4f}'} | "
-                          f"{str(used):>5s}")
-    print("=" * 40)
-    print(f"         РЕЗУЛЬТАТИ ПРЕТРЕКІНГУ: {iteration + 2}")
-    print("=" * 40)
-
-
 
 def return_processed_frame(result, tracker, unprocessed_img=None):
 
@@ -240,8 +120,18 @@ def display(opWrapper, images_path, tracker, num=1):
 
 
     for i, img_path in enumerate(images_path):
+
+        print("=" * 140)
+        print(f"         РЕЗУЛЬТАТИ ПРЕТРЕКІНГУ: {i+1}")
+        print("=" * 140)
+
         result, img = _preprocess_image(opWrapper, img_path, return_img=True)
+        
         frame, log = return_processed_frame(result, tracker, unprocessed_img=img)
+        frame, log = return_processed_frame(result, tracker, unprocessed_img=img)
+
+
+
 
         print_tracking_results(log, i)
 
@@ -282,33 +172,6 @@ def display(opWrapper, images_path, tracker, num=1):
 
             frames = []
             count = 0
-
-    if frames:
-        print("Показуємо залишок...")
-        try:
-            max_h = max(f.shape[0] for f in frames)
-            aligned_frames = []
-            for f in frames:
-                h, w = f.shape[0:2]
-                if h < max_h:
-                    pad_top = (max_h - h) // 2
-                    pad_bottom = max_h - h - pad_top
-                    f_aligned = cv2.copyMakeBorder(f, pad_top, pad_bottom, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
-                    aligned_frames.append(f_aligned)
-                else:
-                    aligned_frames.append(f)
-
-            combined_frame = cv2.hconcat(aligned_frames)
-            cv2.imshow(f"Tracking (Залишок: {len(frames)} frames)", combined_frame)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-        except Exception as e:
-            print(f"Помилка при об'єднанні залишку: {e}")
-
-
-
-from src.boxing_project.tracking.tracker import MultiObjectTracker, TrackerConfig
-from src.boxing_project.tracking.matcher import MatchConfig
 
 # параметри як у tracking.yaml (по-старинці)
 FPS = 60.0
