@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+import numbers
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -142,6 +143,36 @@ def _load_tracker_config_from_yaml(
     return tracker_cfg_copy, copy.deepcopy(raw_cfg)
 
 
+def resolve_show_level(value: Any) -> int:
+    """Convert configuration values to the logging level 0/1/2."""
+
+    if isinstance(value, bool):
+        return 2 if value else 0
+
+    if value is None:
+        return 1
+
+    if isinstance(value, numbers.Integral):
+        level = int(value)
+    elif isinstance(value, str):
+        value = value.strip()
+        if value == "":
+            return 1
+        try:
+            level = int(value)
+        except ValueError as exc:
+            raise ValueError(
+                "tracking.show must be an integer 0, 1 or 2"
+            ) from exc
+    else:
+        raise ValueError("tracking.show must be an integer 0, 1 or 2")
+
+    if level not in (0, 1, 2):
+        raise ValueError("tracking.show must be one of {0, 1, 2}")
+
+    return level
+
+
 class MultiObjectTracker:
     """
     Manages a list of tracks:
@@ -175,9 +206,9 @@ class MultiObjectTracker:
         self._next_id: int = 1
 
         raw_cfg = self.get_config_dict() or {}
-        self.show_debug: bool = bool(
-            raw_cfg.get("tracking", {}).get("show", True)
-        )
+        show_value = raw_cfg.get("tracking", {}).get("show", None)
+        self.show_level: int = resolve_show_level(show_value)
+        self.show_debug: bool = self.show_level >= 2
 
     # ---- utility methods ---- #
 
