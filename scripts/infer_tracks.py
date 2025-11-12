@@ -3,8 +3,9 @@ import os
 import cv2
 from pathlib import Path
 import numpy as np
+from matplotlib.pyplot import title
 
-from src.boxing_project.tracking.tracking_debug import print_tracking_results
+from src.boxing_project.tracking.tracking_debug import print_tracking_results, print_pre_tracking_results
 from src.boxing_project.tracking.tracker import MultiObjectTracker
 from src.boxing_project.tracking import DEFAULT_TRACKING_CONFIG_PATH  # ← беремо шлях до YAML
 
@@ -107,10 +108,23 @@ def return_processed_frame(result, tracker, unprocessed_img=None):
         bb = bbox(kps[det_idx], conf_threshold=conf_th)
         if bb is None:
             continue
+
         x1, y1, x2, y2 = bb
-        cv2.putText(frame, f"ID {track_id}", (x1, y1 - 5),
+        cv2.putText(frame, f"ID {track_id-1}", (x1, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (36, 255, 12), 2)
         cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+
+    for det_idx in range(len(kps)):
+        bb = bbox(kps[det_idx], conf_threshold=conf_th)
+        if bb is None:
+            continue
+        x1, y1, x2, y2 = bb
+
+        # place id in right part of bbox
+        cv2.putText(frame, f"OP {det_idx}", (x1, y1-25),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+
 
     return frame, log  # return frame and log
 
@@ -126,16 +140,30 @@ def display(opWrapper, images_path, tracker, num=1):
     for i, img_path in enumerate(images_path):
 
         if show_flag:
-
             # to clearly divide a different frames
-            print("=" * 140)
-            print(f"         PRE TRACKING RESULTS: {i+1}")
-            print("=" * 140)
+            #print_pre_tracking_results(i)
+            pass
 
         result, img = _preprocess_image(opWrapper, img_path, return_img=True)
         frame, log = return_processed_frame(result, tracker, unprocessed_img=img)
 
-        if show_flag:  # only print logs and show images if show=true
+
+        frame_h, frame_w = frame.shape[:2]
+        text = f"Frame {i+1}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.8
+        color = (0, 255, 0)  # green
+        thickness = 2
+
+        # calculating right top position
+        text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
+        text_w, text_h = text_size
+        org = (frame_w - text_w - 10, text_h + 10)  # (x, y)
+
+        cv2.putText(frame, text, org, font, font_scale, color, thickness, cv2.LINE_AA)
+        # ---------------------------------------------------------
+
+        if show_flag:
             from src.boxing_project.tracking.tracking_debug import print_tracking_results
             print_tracking_results(log, i)
 
@@ -159,7 +187,10 @@ def display(opWrapper, images_path, tracker, num=1):
 
                 combined_frame = cv2.hconcat(aligned_frames)
 
-                cv2.imshow(f"Tracking ({num} frames)", combined_frame)
+                title = str(num) + " frames"
+                if num == 1: title = str(i+1) + " frame"
+
+                cv2.imshow(f"Tracking ({title})", combined_frame)
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()
 
@@ -181,4 +212,4 @@ images_path = sorted(
      if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
 )
 
-display(opWrapper, images_path, tracker, num=1)
+display(opWrapper, images_path, tracker, num=20)

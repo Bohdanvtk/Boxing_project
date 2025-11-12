@@ -2,6 +2,10 @@ import numpy as np
 from typing import Dict, Any, List, Optional, Callable, Tuple
 
 
+#this file allow me to make a clear code by moving all print function to here
+# so there only functions which help in logging information
+
+
 class DebugLog:
 
     id: int = 0
@@ -200,6 +204,12 @@ def fill_pose_full_debug(
         log._print(f"\nD_pose = {D_pose:.6f}  (over {int(used_idx.size)} keypoints)")
 
 
+def print_pre_tracking_results(id):
+    print("\n")
+    print("=" * 140)
+    print(f"         PRE TRACKING RESULTS: {id+1}")
+    print("=" * 140)
+    print("\n")
 # ---------- PRINT TRACKING RESULTS ----------
 
 def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = False):
@@ -212,9 +222,11 @@ def print_tracking_results(log: dict, iteration: int, show_pose_tables: bool = F
     """
     # DEBUG, you can remove this later
 
+    print("\n")
     print("=" * 140)
     print(f"         TRACKING RESULTS: {iteration + 1}")
     print("=" * 140)
+    print("\n")
 
     # --- extract things from per-frame log ---
     active_tracks = log.get("active_tracks", [])
