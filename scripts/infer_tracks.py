@@ -3,9 +3,8 @@ import os
 import cv2
 from pathlib import Path
 import numpy as np
-from matplotlib.pyplot import title
 
-from src.boxing_project.tracking.tracking_debug import print_tracking_results, print_pre_tracking_results
+from src.boxing_project.tracking.tracking_debug import print_tracking_results
 from src.boxing_project.tracking.tracker import MultiObjectTracker
 from src.boxing_project.tracking import DEFAULT_TRACKING_CONFIG_PATH  # ← беремо шлях до YAML
 
@@ -108,23 +107,10 @@ def return_processed_frame(result, tracker, unprocessed_img=None):
         bb = bbox(kps[det_idx], conf_threshold=conf_th)
         if bb is None:
             continue
-
         x1, y1, x2, y2 = bb
-        cv2.putText(frame, f"ID {track_id-1}", (x1, y1 - 5),
+        cv2.putText(frame, f"ID {track_id}", (x1, y1 - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (36, 255, 12), 2)
         cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
-
-    for det_idx in range(len(kps)):
-        bb = bbox(kps[det_idx], conf_threshold=conf_th)
-        if bb is None:
-            continue
-        x1, y1, x2, y2 = bb
-
-        # place id in right part of bbox
-        cv2.putText(frame, f"OP {det_idx}", (x1, y1-25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
-
 
     return frame, log  # return frame and log
 
@@ -133,44 +119,38 @@ def display(opWrapper, images_path, tracker, num=1):
     frames = []
     count = 0
 
-    # get "show" flag from YAML
-    raw_cfg = tracker.get_config_dict() or {}
-    show_flag = raw_cfg.get("tracking", {}).get("show", True)
+    # get "show" level from tracker (0=off, 1=basic, 2=debug)
+    show_level = getattr(tracker, "show_level", None)
+    if show_level is None:
+        raw_cfg = tracker.get_config_dict() or {}
+        show_level = raw_cfg.get("tracking", {}).get("show", 1)
+    try:
+        from src.boxing_project.tracking.tracker import resolve_show_level
+
+        show_level = resolve_show_level(show_level)
+    except Exception:
+        show_level = 1
 
     for i, img_path in enumerate(images_path):
 
-        if show_flag:
+        if show_level >= 1:
+
             # to clearly divide a different frames
-            #print_pre_tracking_results(i)
-            pass
+            print("=" * 140)
+            print(f"         PRE TRACKING RESULTS: {i+1}")
+            print("=" * 140)
 
         result, img = _preprocess_image(opWrapper, img_path, return_img=True)
         frame, log = return_processed_frame(result, tracker, unprocessed_img=img)
 
-
-        frame_h, frame_w = frame.shape[:2]
-        text = f"Frame {i+1}"
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.8
-        color = (0, 255, 0)  # green
-        thickness = 2
-
-        # calculating right top position
-        text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
-        text_w, text_h = text_size
-        org = (frame_w - text_w - 10, text_h + 10)  # (x, y)
-
-        cv2.putText(frame, text, org, font, font_scale, color, thickness, cv2.LINE_AA)
-        # ---------------------------------------------------------
-
-        if show_flag:
+        if show_level >= 1:  # only print logs and show images when enabled
             from src.boxing_project.tracking.tracking_debug import print_tracking_results
             print_tracking_results(log, i)
 
         frames.append(frame)
         count += 1
 
-        if count == num and show_flag:
+        if count == num and show_level >= 1:
             try:
                 max_h = max(f.shape[0] for f in frames)
                 aligned_frames = []
@@ -187,10 +167,7 @@ def display(opWrapper, images_path, tracker, num=1):
 
                 combined_frame = cv2.hconcat(aligned_frames)
 
-                title = str(num) + " frames"
-                if num == 1: title = str(i+1) + " frame"
-
-                cv2.imshow(f"Tracking ({title})", combined_frame)
+                cv2.imshow(f"Tracking ({num} frames)", combined_frame)
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()
 
@@ -212,4 +189,4 @@ images_path = sorted(
      if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
 )
 
-display(opWrapper, images_path, tracker, num=20)
+display(opWrapper, images_path, tracker, num=1)
