@@ -119,13 +119,21 @@ def display(opWrapper, images_path, tracker, num=1):
     frames = []
     count = 0
 
-    # get "show" flag from YAML
-    raw_cfg = tracker.get_config_dict() or {}
-    show_flag = raw_cfg.get("tracking", {}).get("show", True)
+    # get "show" level from tracker (0=off, 1=basic, 2=debug)
+    show_level = getattr(tracker, "show_level", None)
+    if show_level is None:
+        raw_cfg = tracker.get_config_dict() or {}
+        show_level = raw_cfg.get("tracking", {}).get("show", 1)
+    try:
+        from src.boxing_project.tracking.tracker import resolve_show_level
+
+        show_level = resolve_show_level(show_level)
+    except Exception:
+        show_level = 1
 
     for i, img_path in enumerate(images_path):
 
-        if show_flag:
+        if show_level >= 1:
 
             # to clearly divide a different frames
             print("=" * 140)
@@ -135,14 +143,14 @@ def display(opWrapper, images_path, tracker, num=1):
         result, img = _preprocess_image(opWrapper, img_path, return_img=True)
         frame, log = return_processed_frame(result, tracker, unprocessed_img=img)
 
-        if show_flag:  # only print logs and show images if show=true
+        if show_level >= 1:  # only print logs and show images when enabled
             from src.boxing_project.tracking.tracking_debug import print_tracking_results
             print_tracking_results(log, i)
 
         frames.append(frame)
         count += 1
 
-        if count == num and show_flag:
+        if count == num and show_level >= 1:
             try:
                 max_h = max(f.shape[0] for f in frames)
                 aligned_frames = []
