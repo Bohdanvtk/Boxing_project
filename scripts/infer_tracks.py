@@ -1,192 +1,88 @@
-import sys
-import os
-import cv2
+# scripts/infer_tracks.py
+
+import yaml
 from pathlib import Path
-import numpy as np
 
-from src.boxing_project.tracking.tracking_debug import print_tracking_results
-from src.boxing_project.tracking.tracker import MultiObjectTracker
-from src.boxing_project.tracking import DEFAULT_TRACKING_CONFIG_PATH  # ← беремо шлях до YAML
-
-
-
-
-OPENPOSE_ROOT = '/home/bohdan/openpose'
-SAVE_WIDTH = 700
-IMAGE_DIR_PATH = '/home/bohdan/Документи/Samples/Images/boxing/Processed_data/output/GH098416_00051'
-
-OPENPOSE_PY = os.path.join(OPENPOSE_ROOT, 'build', 'python')
-if OPENPOSE_PY not in sys.path:
-    sys.path.append(OPENPOSE_PY)
-
-try:
-    from openpose import pyopenpose as op
-except ImportError:
-    print("Please be sure that you installed openpose correctly and set a correct path to it")
-
-
-# ---- OpenPose params (можна теж колись винести в YAML, але поки лишаємо тут) ----
-params = dict()
-params['model_folder'] = os.path.join(OPENPOSE_ROOT, 'models')
-params['hand'] = False
-params['face'] = False
-params['net_resolution'] = '-1x256'
-params['num_gpu'] = 1
-params['num_gpu_start'] = 0
-params['render_pose'] = 0        # do not render (saves VRAM)
-params['disable_blending'] = True
-params['number_people_max'] = 5
-params['disable_multi_thread'] = True
-
-opWrapper = op.WrapperPython()
-opWrapper.configure(params)
-opWrapper.start()
-
-
-def _preprocess_image(opWrapper, img_path, conf_threshold=0.1, return_img=False):
-    img = cv2.imread(img_path)
-
-    if img is None:
-        raise RuntimeError(f'Failed to open image {img_path}')
-    h, w = img.shape[:2]
-    if w > SAVE_WIDTH:
-        scale = SAVE_WIDTH / w
-        img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-
-    datum = op.Datum()
-    datum.cvInputData = img
-    datums = op.VectorDatum()
-    datums.append(datum)
-    opWrapper.emplaceAndPop(datums)
-
-    result = datums[0]
-
-    if return_img:
-        return result, img
-    else:
-        return result
-
-
-def bbox(kps, conf_threshold=0.1):
-    """
-    Compute bbox over keypoints with confidence > conf_threshold.
-    """
-    valid = kps[:, 2] > conf_threshold
-    if not valid.any():
-        return None
-
-    xs = kps[valid, 0]
-    ys = kps[valid, 1]
-
-    x1, y1 = int(xs.min()), int(ys.min())
-    x2, y2 = int(xs.max()), int(ys.max())
-    return x1, y1, x2, y2
-
-
-def return_processed_frame(result, tracker, unprocessed_img=None):
-    if unprocessed_img is not None:
-        frame = unprocessed_img
-    else:
-        frame = result.cvOutputData
-
-    if result.poseKeypoints is None:
-        print('No person detected')
-        return frame, {"matches": [], "cost_matrix": np.zeros((0, 0)), "active_tracks": []}
-
-    # (N, 25, 3)
-    kps = result.poseKeypoints
-
-    # adapt OpenPose output to tracker API
-    people = [{"keypoints": kps[i]} for i in range(len(kps))]
-    log = tracker.update_with_openpose(people)
-
-    # use threshold from tracker config instead of hardcoded value
-    conf_th = tracker.cfg.min_kp_conf
-
-    for track_id, det_idx in log["matches"]:
-        bb = bbox(kps[det_idx], conf_threshold=conf_th)
-        if bb is None:
-            continue
-        x1, y1, x2, y2 = bb
-        cv2.putText(frame, f"ID {track_id}", (x1, y1 - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (36, 255, 12), 2)
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
-
-    return frame, log  # return frame and log
-
-
-def display(opWrapper, images_path, tracker, num=1):
-    frames = []
-    count = 0
-
-    # get "show" level from tracker (0=off, 1=basic, 2=debug)
-    show_level = getattr(tracker, "show_level", None)
-    if show_level is None:
-        raw_cfg = tracker.get_config_dict() or {}
-        show_level = raw_cfg.get("tracking", {}).get("show", 1)
-    try:
-        from src.boxing_project.tracking.tracker import resolve_show_level
-
-        show_level = resolve_show_level(show_level)
-    except Exception:
-        show_level = 1
-
-    for i, img_path in enumerate(images_path):
-
-        if show_level >= 1:
-
-            # to clearly divide a different frames
-            print("=" * 140)
-            print(f"         PRE TRACKING RESULTS: {i+1}")
-            print("=" * 140)
-
-        result, img = _preprocess_image(opWrapper, img_path, return_img=True)
-        frame, log = return_processed_frame(result, tracker, unprocessed_img=img)
-
-        if show_level >= 1:  # only print logs and show images when enabled
-            from src.boxing_project.tracking.tracking_debug import print_tracking_results
-            print_tracking_results(log, i)
-
-        frames.append(frame)
-        count += 1
-
-        if count == num and show_level >= 1:
-            try:
-                max_h = max(f.shape[0] for f in frames)
-                aligned_frames = []
-                for f in frames:
-                    h, w = f.shape[:2]
-                    if h < max_h:
-                        pad_top = (max_h - h) // 2
-                        pad_bottom = max_h - h - pad_top
-                        f_aligned = cv2.copyMakeBorder(f, pad_top, pad_bottom, 0, 0,
-                                                       cv2.BORDER_CONSTANT, value=(0, 0, 0))
-                        aligned_frames.append(f_aligned)
-                    else:
-                        aligned_frames.append(f)
-
-                combined_frame = cv2.hconcat(aligned_frames)
-
-                cv2.imshow(f"Tracking ({num} frames)", combined_frame)
-                cv2.waitKey(0)
-                cv2.destroyAllWindows()
-
-            except Exception as e:
-                print(f"Error while frame merging: {e}")
-                print("Skip this frame.")
-
-            frames = []
-            count = 0
-
-
-# --------- CREATE TRACKER FROM YAML CONFIG ---------
-
-# Just use YAML-based tracker config (tracking.yaml via DEFAULT_TRACKING_CONFIG_PATH)
-tracker = MultiObjectTracker(config_path=DEFAULT_TRACKING_CONFIG_PATH)
-
-images_path = sorted(
-    [p for p in Path(IMAGE_DIR_PATH).iterdir()
-     if p.suffix.lower() in (".jpg", ".jpeg", ".png")]
+from src.boxing_project.tracking.inference_utils import (
+    init_openpose_from_config,
+    visualize_sequence,
 )
+from src.boxing_project.tracking.tracker import MultiObjectTracker
 
-display(opWrapper, images_path, tracker, num=1)
+
+# !!! do NOT import src.boxing_project.utils.config here !!!
+
+def load_config(path: Path):
+    """Load YAML file into a Python dict, without any heavy side-effects."""
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+
+
+def get_project_root() -> Path:
+    """
+    Resolve project root as the parent of the 'scripts' directory.
+    This file is .../Boxing_Project/scripts/infer_tracks.py
+    so project root is parents[1].
+    """
+    return Path(__file__).resolve().parents[1]
+
+
+def main():
+    project_root = get_project_root()
+
+    # --- config path resolved from project root ---
+    cfg_path = project_root / "configs" / "infer_tracks.yaml"
+    if not cfg_path.exists():
+        raise FileNotFoundError(f"Config file not found: {cfg_path}")
+
+    cfg = load_config(cfg_path)
+
+    # --- OpenPose ---
+    _, opWrapper = init_openpose_from_config(cfg["openpose"])
+
+    # --- tracker ---
+    tracking_cfg = cfg["tracking"]
+    tracking_cfg_path = tracking_cfg["config_path"]
+
+    # if config_path is relative → resolve from project root
+    tracking_cfg_path = (
+        project_root / tracking_cfg_path
+        if not Path(tracking_cfg_path).is_absolute()
+        else Path(tracking_cfg_path)
+    )
+
+    if not tracking_cfg_path.exists():
+        raise FileNotFoundError(f"Tracking config not found: {tracking_cfg_path}")
+
+    tracker = MultiObjectTracker(config_path=str(tracking_cfg_path))
+
+    # --- images ---
+    data_cfg = cfg["data"]
+    image_dir = Path(data_cfg["image_dir"])
+    if not image_dir.is_absolute():
+        image_dir = project_root / image_dir
+
+    if not image_dir.exists():
+        raise FileNotFoundError(f"Image directory does not exist: {image_dir}")
+
+    images = sorted(
+        p for p in image_dir.iterdir()
+        if p.suffix.lower() in (".jpg", ".jpeg", ".png")
+    )
+
+    if not images:
+        raise RuntimeError(f"No images found in directory: {image_dir}")
+
+    # --- run inference loop ---
+    visualize_sequence(
+        opWrapper=opWrapper,
+        tracker=tracker,
+        images=images,
+        save_width=data_cfg["save_width"],
+        merge_n=tracking_cfg["num_frames_merge"],
+    )
+
+
+if __name__ == "__main__":
+    main()
