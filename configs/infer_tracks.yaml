@@ -1,4 +1,4 @@
-# configs/infer_tracks.yaml
+#configs/infer_tracks.yaml
 
 openpose:
   root: "/home/bohdan/openpose"   # path to openpose root
